@@ -261,6 +261,7 @@ pub struct MosquittoMessage<'a> {
     pub payload: &'a [u8],
     pub qos: i32,
     pub retain: bool,
+    mosquitto_evt_message: Option<*mut mosquitto_evt_message>,
 }
 
 pub enum QOS {
@@ -321,6 +322,160 @@ pub trait MosquittoClientContext {
 
 pub struct MosquittoClient {
     pub client: *mut mosquitto,
+}
+
+macro_rules! debug_assert_null_or_str {
+    ($ptr:expr, $l:literal) => {
+        unsafe {
+            debug_assert!(!$ptr.is_null(), "ptr is null!");
+            let c_str = std::ffi::CStr::from_ptr($ptr);
+            c_str.to_str().expect($l)
+        }
+    };
+}
+
+const PAYLOAD_NULL: &[u8] = &[];
+macro_rules! debug_assert_null_or_slice {
+    ($data:expr, $datalen:expr, $l:literal) => {
+        unsafe {
+            let event_data = $data as *const u8;
+            if event_data.is_null() {
+                PAYLOAD_NULL
+            } else {
+                debug_assert!(!event_data.is_null(), $l);
+                std::slice::from_raw_parts(event_data, $datalen as usize)
+            }
+        }
+    };
+}
+
+impl<'a> From<&mut mosquitto_evt_message> for MosquittoMessage<'a> {
+    fn from(event_data: &mut mosquitto_evt_message) -> Self {
+        let topic: &str = debug_assert_null_or_str!(
+            event_data.topic,
+            "message trampoline failed to create topic &str from CStr pointer"
+        );
+
+        let payload: &[u8] = debug_assert_null_or_slice!(
+            event_data.payload,
+            event_data.payloadlen,
+            "on_message_trampoline_is_null"
+        );
+
+        Self {
+            topic,
+            payload,
+            qos: event_data.qos as i32,
+            retain: event_data.retain,
+            mosquitto_evt_message: Some(event_data),
+        }
+    }
+}
+
+impl<'a> From<&mut mosquitto_evt_acl_check> for MosquittoMessage<'a> {
+    fn from(event_data: &mut mosquitto_evt_acl_check) -> Self {
+        let topic: &str = debug_assert_null_or_str!(
+            event_data.topic,
+            "message trampoline failed to create topic &str from CStr pointer"
+        );
+
+        let payload: &[u8] = debug_assert_null_or_slice!(
+            event_data.payload,
+            event_data.payloadlen,
+            "on_message_trampoline_is_null"
+        );
+
+        Self {
+            topic,
+            payload,
+            qos: event_data.qos as i32,
+            retain: event_data.retain,
+            mosquitto_evt_message: None,
+        }
+    }
+}
+
+impl<'a> From<&mut mosquitto_evt_control> for MosquittoMessage<'a> {
+    fn from(event_data: &mut mosquitto_evt_control) -> Self {
+        let topic: &str = debug_assert_null_or_str!(
+            event_data.topic,
+            "message trampoline failed to create topic &str from CStr pointer"
+        );
+
+        let payload: &[u8] = debug_assert_null_or_slice!(
+            event_data.payload,
+            event_data.payloadlen,
+            "on_message_trampoline_is_null"
+        );
+
+        Self {
+            topic,
+            payload,
+            qos: event_data.qos as i32,
+            retain: event_data.retain,
+            mosquitto_evt_message: None,
+        }
+    }
+}
+
+impl<'a> MosquittoMessage<'a> {
+
+    pub fn set_topic(&mut self, topic: &str) -> Result<(), Error> {
+        if self.mosquitto_evt_message.is_none() {
+            return Err(Error::Inval);
+        }
+
+        unsafe {
+            let cstr = &mut std::ffi::CString::new(topic).map_err(|_| Error::Inval)?;
+            let bytes = cstr.as_bytes_with_nul();
+            let dst = mosquitto_strdup(bytes.as_ptr() as *const libc::c_char);
+            if dst.is_null() {
+                return Err(Error::NoMem);
+            }
+
+            let mosquitto_evt_message = *self.mosquitto_evt_message.as_mut().unwrap();
+            (*mosquitto_evt_message).topic = dst;
+
+            let c_str = std::ffi::CStr::from_ptr(dst);
+            self.topic = c_str.to_str()
+                .expect("failed to create topic &str from CStr pointer");
+        }
+
+        Ok(())
+    }
+
+    pub fn set_payload(&mut self, payload: &[u8]) -> Result<(), Error> {
+        if self.mosquitto_evt_message.is_none() {
+            return Err(Error::Inval);
+        }
+
+        unsafe {
+            let dst: *mut libc::c_void = mosquitto_calloc(1, payload.len() as usize) as *mut libc::c_void;
+            if dst.is_null() {
+                return Err(Error::NoMem);
+            }
+            libc::memcpy(dst, payload.as_ptr() as *const libc::c_void, payload.len() as usize);
+
+            let mosquitto_evt_message = *self.mosquitto_evt_message.as_mut().unwrap();
+            (*mosquitto_evt_message).payload = dst;
+            (*mosquitto_evt_message).payloadlen = payload.len() as u32;
+
+            self.payload = std::slice::from_raw_parts(dst as *const u8, payload.len());
+        }
+
+        Ok(())
+    }
+
+    pub fn set_qos(&mut self, qos: QOS) -> Result<(), Error> {
+        self.mosquitto_evt_message.as_mut()
+            .map(|mosquitto_evt_message| unsafe {
+                (*(*mosquitto_evt_message)).qos = qos.to_i32() as u8;
+            })
+            .map(|_| {
+                self.qos = qos.to_i32();
+            })
+            .ok_or_else(|| Error::Inval)
+    }
 }
 
 impl MosquittoClientContext for MosquittoClient {

@@ -17,20 +17,6 @@ macro_rules! create_dynamic_library {
             };
         }
 
-        macro_rules! debug_assert_null_or_slice {
-            ($data:expr, $datalen:expr, $l:literal) => {
-                unsafe {
-                    let event_data = $data as *const u8;
-                    if event_data.is_null() {
-                        PAYLOAD_NULL
-                    } else {
-                        debug_assert!(!event_data.is_null(), $l);
-                        std::slice::from_raw_parts(event_data, $datalen as usize)
-                    }
-                }
-            };
-        }
-
         use mosquitto_dev::*;
         use std::ffi::CString;
         use std::os::raw::c_int;
@@ -109,26 +95,12 @@ macro_rules! create_dynamic_library {
                 return Error::Unknown.into();
             };
 
-            let topic: &str = debug_assert_null_or_str!(
-                event_data.topic,
-                "failed to create topic str on acl check trampoline"
-            );
+            let client = event_data.client;
+            let msg = MosquittoMessage::from(event_data);
 
-            let payload: &[u8] = debug_assert_null_or_slice!(
-                event_data.payload,
-                event_data.payloadlen,
-                "acl_check_trampoline payload is null"
-            );
-
-            let msg = MosquittoMessage {
-                topic,
-                payload,
-                qos: event_data.qos.into(),
-                retain: event_data.retain,
-            };
             match user_data.external_user_data.acl_check(
                 &MosquittoClient {
-                    client: event_data.client,
+                    client,
                 },
                 access_level,
                 msg,
@@ -274,27 +246,12 @@ macro_rules! create_dynamic_library {
             let event_data: &mut mosquitto_evt_control =
                 unsafe { &mut *(event_data as *mut mosquitto_evt_control) };
 
-            let topic: &str = debug_assert_null_or_str!(
-                event_data.topic,
-                "control trampoline failed to create topic &str from CStr pointer"
-            );
-
-            let payload: &[u8] = debug_assert_null_or_slice!(
-                event_data.payload,
-                event_data.payloadlen,
-                "on_control_trampoline payload is null"
-            );
-
-            let msg = MosquittoMessage {
-                topic,
-                payload,
-                qos: event_data.qos.into(),
-                retain: event_data.retain,
-            };
+            let client = event_data.client;
+            let msg = MosquittoMessage::from(event_data);
 
             user_data.external_user_data.on_control(
                 &MosquittoClient {
-                    client: event_data.client,
+                    client,
                 },
                 msg,
             );
@@ -320,27 +277,12 @@ macro_rules! create_dynamic_library {
             let event_data: &mut mosquitto_evt_message =
                 unsafe { &mut *(event_data as *mut mosquitto_evt_message) };
 
-            let topic: &str = debug_assert_null_or_str!(
-                event_data.topic,
-                "message trampoline failed to create topic &str from CStr pointer"
-            );
-
-            let payload: &[u8] = debug_assert_null_or_slice!(
-                event_data.payload,
-                event_data.payloadlen,
-                "on_message_trampoline_is_null"
-            );
-
-            let msg = MosquittoMessage {
-                topic,
-                payload,
-                qos: event_data.qos.into(),
-                retain: event_data.retain,
-            };
+            let client = event_data.client;
+            let msg = MosquittoMessage::from(event_data);
 
             user_data.external_user_data.on_message(
                 &MosquittoClient {
-                    client: event_data.client,
+                    client,
                 },
                 msg,
             );
